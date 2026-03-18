@@ -2,15 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nutrition">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
 <title>Nutrition Tracker</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#fff;--bg2:#f5f5f3;--bg3:#ebebea;--text:#1a1a1a;--text2:#555;--text3:#999;--border:rgba(0,0,0,0.1);--border2:rgba(0,0,0,0.2);--green:#1D9E75;--red:#E24B4A;--blue:#378ADD;--amber:#BA7517;--r:8px;--r2:12px}
 @media(prefers-color-scheme:dark){:root{--bg:#1c1c1e;--bg2:#2c2c2e;--bg3:#3a3a3c;--text:#f2f2f7;--text2:#aeaeb2;--text3:#636366;--border:rgba(255,255,255,0.1);--border2:rgba(255,255,255,0.2)}}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;min-height:100vh}
-.topbar{background:var(--bg);border-bottom:.5px solid var(--border);padding:0 1rem;position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;min-height:100vh;padding-bottom:env(safe-area-inset-bottom)}
+.topbar{background:var(--bg);border-bottom:.5px solid var(--border);padding:0 1rem;padding-left:max(1rem,env(safe-area-inset-left));padding-right:max(1rem,env(safe-area-inset-right));position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none}
 .topbar::-webkit-scrollbar{display:none}
 .topbar button{padding:10px 12px;border:none;background:transparent;color:var(--text2);cursor:pointer;font-size:13px;white-space:nowrap;border-bottom:2px solid transparent;font-weight:400;transition:all .15s}
 .topbar button.active{color:var(--text);border-bottom-color:var(--text);font-weight:500}
@@ -430,66 +435,119 @@ function parseNutrition(s){
   s=s||'';
   const g=p=>{const m=s.match(new RegExp(p,'i'));return m?parseFloat(m[1]):0;};
   return{
-    kcal: g('([\\d.]+)\\s*kcal'),
-    protein: g('([\\d.]+)\\s*g?\\s*(?:eiwit|protein)') || g('\\b([\\d.]+)P\\b'),
-    carbs:   g('([\\d.]+)\\s*g?\\s*(?:koolhydraten|carbs)') || g('\\b([\\d.]+)C\\b'),
-    fat:     g('([\\d.]+)\\s*g?\\s*(?:vet|fat)') || g('\\b([\\d.]+)F\\b'),
-    fiber:   g('([\\d.]+)\\s*g?\\s*(?:vezels|fiber|Fib)') || 0
+    kcal:   g('([\\d.]+)\\s*kcal'),
+    protein:g('([\\d.]+)\\s*g?\\s*(?:eiwit|protein)') || g('\\b([\\d.]+)P\\b'),
+    carbs:  g('([\\d.]+)\\s*g?\\s*(?:koolhydraten|carbs)') || g('\\b([\\d.]+)C\\b'),
+    fat:    g('([\\d.]+)\\s*g?\\s*(?:vet|fat)') || g('\\b([\\d.]+)F\\b'),
+    fiber:  g('([\\d.]+)\\s*g?\\s*(?:vezels|fiber|Fib)') || 0
   };
 }
 
-// Step 1+2: local lookup — exact then partial match per token
+// Resolve date references like "gisteren", "eergisteren", "maandag", ISO date
+function resolveDate(ref){
+  const now=new Date();
+  const ymd=d=>{
+    const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dy=String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${dy}`;
+  };
+  if(!ref||/vandaag|today|nu|now/i.test(ref)) return td();
+  if(/gisteren|yesterday/i.test(ref)){const d=new Date(now);d.setDate(d.getDate()-1);return ymd(d);}
+  if(/eergisteren|day before/i.test(ref)){const d=new Date(now);d.setDate(d.getDate()-2);return ymd(d);}
+  // day names NL+EN
+  const days={maandag:1,dinsdag:2,woensdag:3,donderdag:4,vrijdag:5,zaterdag:6,zondag:0,monday:1,tuesday:2,wednesday:3,thursday:4,friday:5,saturday:6,sunday:0};
+  for(const [name,dow] of Object.entries(days)){
+    if(new RegExp(name,'i').test(ref)){
+      const d=new Date(now);
+      let diff=d.getDay()-dow;
+      if(diff<=0) diff+=7;
+      d.setDate(d.getDate()-diff);
+      return ymd(d);
+    }
+  }
+  // ISO date like 2026-03-15
+  if(/\d{4}-\d{2}-\d{2}/.test(ref)) return ref.match(/(\d{4}-\d{2}-\d{2})/)[1];
+  return td();
+}
+
+// Local lookup — exact then partial match per token
 function localLookup(msg){
   const lower=msg.toLowerCase();
-  // split on + , & newline
   const parts=lower.split(/[,+&\n]+/).map(s=>s.trim()).filter(s=>s.length>1);
   const results=[];
-
   for(const part of parts){
     const qg=part.match(/([\d.]+)\s*g\b/i);
     const qml=part.match(/([\d.]+)\s*ml\b/i);
     const qL=part.match(/([\d.]+)\s*[lL]\b/);
     const qn=part.match(/^([\d.]+)\s+/);
-    const qty  = qg  ? parseFloat(qg[1])  : null;
-    const qtyml= qml ? parseFloat(qml[1]) : null;
-    const qtyL = qL  ? parseFloat(qL[1])  : null;
-    const qtyn = qn  ? parseFloat(qn[1])  : null;
+    const qty  =qg ?parseFloat(qg[1]) :null;
+    const qtyml=qml?parseFloat(qml[1]):null;
+    const qtyL =qL ?parseFloat(qL[1]) :null;
+    const qtyn =qn ?parseFloat(qn[1]) :null;
     const clean=part.replace(/([\d.]+\s*(g|ml|[lL])\b)/gi,'').replace(/^[\d.]+\s+/,'').trim();
     if(!clean||clean.length<2) continue;
-
-    // exact match
     let m=S.defs.find(d=>d.Item.toLowerCase()===clean);
-    // partial: item name contains clean or vice versa (after stripping parenthetical)
     if(!m) m=S.defs.find(d=>{
       const base=d.Item.toLowerCase().split('(')[0].trim();
       return base.includes(clean)||clean.includes(base);
     });
-    // all meaningful words match
     if(!m){
       const words=clean.split(/\s+/).filter(w=>w.length>3);
       if(words.length) m=S.defs.find(d=>words.every(w=>d.Item.toLowerCase().includes(w)));
     }
-
     if(m){
       const info=m.info||m['Voedingswaarden / notitie']||'';
       const n=parseNutrition(info);
-      let scale=1, scaleNote='';
-      if(qty!=null)      {scale=qty/100; scaleNote=qty+'g';}
+      let scale=1,scaleNote='';
+      if(qty!=null)      {scale=qty/100;   scaleNote=qty+'g';}
       else if(qtyml!=null){scale=qtyml/100; scaleNote=qtyml+'ml';}
       else if(qtyL!=null) {scale=qtyL*10;   scaleNote=qtyL+'L';}
-      else if(qtyn!=null && qtyn<=20){scale=qtyn; scaleNote=qtyn+'×';}
+      else if(qtyn!=null&&qtyn<=20){scale=qtyn;scaleNote=qtyn+'×';}
       results.push({
-        item:m.Item, note:m.Item+(scaleNote?' ('+scaleNote+')':''),
-        kcal:Math.round(n.kcal*scale),
-        protein:+(n.protein*scale).toFixed(1),
-        carbs:+(n.carbs*scale).toFixed(1),
-        fat:+(n.fat*scale).toFixed(1),
+        item:m.Item,note:m.Item+(scaleNote?' ('+scaleNote+')':''),
+        kcal:Math.round(n.kcal*scale),protein:+(n.protein*scale).toFixed(1),
+        carbs:+(n.carbs*scale).toFixed(1),fat:+(n.fat*scale).toFixed(1),
         fiber:+(n.fiber*scale).toFixed(1),
-        fluid: qtyL?qtyL : qtyml?+(qtyml/1000).toFixed(3) : 0
+        fluid:qtyL?qtyL:qtyml?+(qtyml/1000).toFixed(3):0
       });
     }
   }
   return results;
+}
+
+// Apply macros to a specific date (add on top of existing values)
+function applyToDate(dateStr, p){
+  let entry=S.daily.find(d=>d.Date===dateStr);
+  if(!entry){
+    // create stub for that date
+    const lastW=[...S.daily].filter(d=>d['Weight (kg)']!=null).slice(-1)[0]?.['Weight (kg)']||74;
+    entry={'Day #':S.daily.length+1,Date:dateStr,'Week #':wkNum(dateStr),
+      'Weight (kg)':null,'Intake (kcal)':0,'Protein (g)':0,'Carbs (g)':0,
+      'Fat (g)':0,'Fiber (g)':0,'Fluid (L)':0,'Apple Active (kcal)':0,
+      'Apple Total (kcal)':0,'Net (Total-Intake)':0,'Cumulative Net (kcal)':0,
+      'BMR (kcal)':1657,'Protein Goal (g)':+(lastW*1.8).toFixed(1),
+      'Calorie Goal (kcal)':2000,Notes:''};
+    S.daily.push(entry);
+    S.daily.sort((a,b)=>a.Date.localeCompare(b.Date));
+  }
+  // ADD macros
+  if(p.add_kcal)   entry['Intake (kcal)']   =(entry['Intake (kcal)']||0)+p.add_kcal;
+  if(p.add_protein)entry['Protein (g)']     =(entry['Protein (g)']||0)+p.add_protein;
+  if(p.add_carbs)  entry['Carbs (g)']       =(entry['Carbs (g)']||0)+p.add_carbs;
+  if(p.add_fat)    entry['Fat (g)']         =(entry['Fat (g)']||0)+p.add_fat;
+  if(p.add_fiber)  entry['Fiber (g)']       =(entry['Fiber (g)']||0)+p.add_fiber;
+  if(p.add_fluid)  entry['Fluid (L)']       =(entry['Fluid (L)']||0)+p.add_fluid;
+  // SET fields (overwrite, e.g. Apple values, weight)
+  if(p.set_active!=null) entry['Apple Active (kcal)']=p.set_active;
+  if(p.set_total!=null)  entry['Apple Total (kcal)'] =p.set_total;
+  if(p.set_weight!=null) entry['Weight (kg)']        =p.set_weight;
+  if(p.set_kcal!=null)   entry['Intake (kcal)']      =p.set_kcal;
+  if(p.set_notes)        entry['Notes']=(entry['Notes']?entry['Notes']+'\n':'')+p.set_notes;
+  // Recalc net
+  const at=entry['Apple Total (kcal)']||0;
+  const k=entry['Intake (kcal)']||0;
+  entry['Net (Total-Intake)']=at-k;
+  sv();
+  if(dateStr===td()){loadToday();buildTM();}
 }
 
 async function chat(){
@@ -501,92 +559,101 @@ async function chat(){
   const isQ=/^(wat|what|hoeveel|how|hoe|kun|can|is|are|tell|help|explain|show|geef|vertel)/i.test(msg.trim());
 
   // ── Step 1+2: local JS lookup (exact then partial) ──────
-  if(!isQ){
+  // Only for food items, not date-relative or Apple/weight updates
+  const hasDateRef=/gisteren|eergisteren|yesterday|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2}/i.test(msg);
+  const hasAppleRef=/apple|actief|active|total|stappen|steps|gewicht|weight/i.test(msg);
+  const hasSetRef=/was|waren|is geweest|update|wijzig|change|set|stel in/i.test(msg);
+
+  if(!isQ && !hasDateRef && !hasAppleRef && !hasSetRef){
     const hits=localLookup(msg);
     if(hits.length>0){
       const tot=hits.reduce((a,h)=>({
-        kcal:a.kcal+h.kcal, protein:a.protein+h.protein,
-        carbs:a.carbs+h.carbs, fat:a.fat+h.fat,
-        fiber:a.fiber+h.fiber, fluid:a.fluid+h.fluid
+        kcal:a.kcal+h.kcal,protein:a.protein+h.protein,
+        carbs:a.carbs+h.carbs,fat:a.fat+h.fat,
+        fiber:a.fiber+h.fiber,fluid:a.fluid+h.fluid
       }),{kcal:0,protein:0,carbs:0,fat:0,fiber:0,fluid:0});
-      applyM({add_kcal:tot.kcal,add_protein:tot.protein,add_carbs:tot.carbs,
-              add_fat:tot.fat,add_fiber:tot.fiber,add_fluid:tot.fluid});
+      applyToDate(td(),{add_kcal:tot.kcal,add_protein:tot.protein,add_carbs:tot.carbs,
+        add_fat:tot.fat,add_fiber:tot.fiber,add_fluid:tot.fluid});
       const lines=hits.map(h=>'  ✓ '+h.note).join('\n');
-      addM('Matched in Defaults:\n'+lines+'\n\n+'+tot.kcal+' kcal · P'+tot.protein+'g · C'+tot.carbs+'g · F'+tot.fat+'g · Fib'+tot.fiber+'g'+(tot.fluid>0?' · '+tot.fluid.toFixed(2)+'L':''), 'bot');
+      addM('Matched in Defaults:\n'+lines+'\n\n+'+tot.kcal+' kcal · P'+tot.protein+'g · C'+tot.carbs+'g · F'+tot.fat+'g · Fib'+tot.fiber+'g'+(tot.fluid>0?' · '+tot.fluid.toFixed(2)+'L':''),'bot');
       return;
     }
   }
 
-  // ── Step 3: Claude fallback ─────────────────────────────
+  // ── Step 3: Claude — with date awareness ────────────────
   addM('…','bot','thinking');
   try{
-    const defsRef=S.defs.map(d=>`- ${d.Item}: ${(d.info||d['Voedingswaarden / notitie']||'').slice(0,150)}`).join('\n');
-    const sys=`You are a nutrition assistant for a Dutch/English food log. Date: ${td()}.
-Today's log so far: ${JSON.stringify(gt()||{})}.
+    const recentDays=S.daily.slice(-7).map(d=>({
+      date:d.Date,kcal:d['Intake (kcal)'],protein:d['Protein (g)'],
+      carbs:d['Carbs (g)'],fat:d['Fat (g)'],fiber:d['Fiber (g)'],
+      fluid:d['Fluid (L)'],apple_active:d['Apple Active (kcal)'],
+      apple_total:d['Apple Total (kcal)'],weight:d['Weight (kg)'],notes:d.Notes
+    }));
+    const defsRef=S.defs.map(d=>`- ${d.Item}: ${(d.info||d['Voedingswaarden / notitie']||'').slice(0,120)}`).join('\n');
+    const sys=`You are a nutrition log assistant. Today is ${td()} (${new Date().toLocaleDateString('nl-NL',{weekday:'long'})}).
+Recent log (last 7 days): ${JSON.stringify(recentDays)}.
 
-DEFAULTS DATABASE (use exact values when matched, scale by quantity):
+DEFAULTS DATABASE:
 ${defsRef}
 
-When user logs food → respond ONLY with JSON (no text outside):
-{"add_kcal":N,"add_protein":N,"add_carbs":N,"add_fat":N,"add_fiber":N,"add_fluid":N,"note":"per-item breakdown","matched_from_defaults":true_or_false}
-For questions → answer conversationally, no JSON. Be concise.`;
+The user can refer to dates in Dutch or English: "gisteren"=yesterday, "eergisteren"=day before yesterday, day names, or ISO dates.
+They can ADD food to a day, or SET/UPDATE specific fields (Apple Active, Apple Total, weight, total intake).
+
+Respond with ONLY a JSON object — nothing else:
+
+For ADDING food/macros to a date:
+{"action":"add","date":"YYYY-MM-DD","add_kcal":N,"add_protein":N,"add_carbs":N,"add_fat":N,"add_fiber":N,"add_fluid":N,"note":"what was added"}
+
+For SETTING/UPDATING specific fields on a date (Apple values, weight, overwrite intake):
+{"action":"set","date":"YYYY-MM-DD","set_active":N_or_null,"set_total":N_or_null,"set_weight":N_or_null,"set_kcal":N_or_null,"set_notes":"optional note","note":"what was updated"}
+
+For BOTH adding food AND updating Apple/weight in one message:
+{"action":"both","date":"YYYY-MM-DD","add_kcal":N,"add_protein":N,"add_carbs":N,"add_fat":N,"add_fiber":N,"add_fluid":N,"set_active":N_or_null,"set_total":N_or_null,"set_weight":N_or_null,"note":"summary"}
+
+For questions (not logging): answer conversationally — no JSON.
+
+Rules:
+- Use exact values from Defaults when items match, scale by quantity.
+- "ik heb 600 kcal gegeten" with no other info → add_kcal:600, other macros 0.
+- If user only gives kcal with no macros, set add_protein/carbs/fat/fiber to 0.
+- Always resolve the date correctly from the context.`;
+
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:500,system:sys,messages:[{role:'user',content:msg}]})});
     const data=await r.json();
     const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
     rmM('thinking');
+
     const jm=text.match(/\{[\s\S]*?\}/);
     if(jm){
       try{
         const p=JSON.parse(jm[0]);
-        applyM(p);
-        const src=p.matched_from_defaults?'✓ Defaults (via Claude)':'~ Claude estimate';
-        addM(src+'\n+'+p.add_kcal+' kcal · P'+f(p.add_protein,1)+'g · C'+f(p.add_carbs,1)+'g · F'+f(p.add_fat,1)+'g · Fib'+f(p.add_fiber,1)+'g\n'+(p.note||''), 'bot');
+        const dateStr=p.date||td();
+        const isToday=dateStr===td();
+        const dateLabel=isToday?'vandaag':dateStr;
+
+        if(p.action==='add'||p.action==='both'){
+          applyToDate(dateStr,p);
+          addM((p.add_kcal||p.add_protein?'✓ Toegevoegd aan '+dateLabel+':\n+'+
+            (p.add_kcal||0)+' kcal · P'+(p.add_protein||0)+'g · C'+(p.add_carbs||0)+'g · F'+(p.add_fat||0)+'g'
+            +(p.add_fluid?'\nVocht: +'+p.add_fluid+'L':''):'')
+            +(p.set_active!=null||p.set_total!=null?'\nApple: active '+(p.set_active||'—')+' / total '+(p.set_total||'—'):'')
+            +(p.set_weight!=null?'\nGewicht: '+p.set_weight+' kg':'')
+            +'\n'+(p.note||''),'bot');
+        } else if(p.action==='set'){
+          applyToDate(dateStr,p);
+          addM('✓ Bijgewerkt voor '+dateLabel+':\n'
+            +(p.set_active!=null?'Apple active: '+p.set_active+' kcal\n':'')
+            +(p.set_total!=null?'Apple total: '+p.set_total+' kcal\n':'')
+            +(p.set_weight!=null?'Gewicht: '+p.set_weight+' kg\n':'')
+            +(p.set_kcal!=null?'Intake: '+p.set_kcal+' kcal\n':'')
+            +(p.note||''),'bot');
+        } else {
+          addM(text,'bot');
+        }
       }catch(e){addM(text,'bot');}
     }else{addM(text,'bot');}
-  }catch(e){rmM('thinking');addM('Error: '+e.message,'bot');}
+  }catch(e){rmM('thinking');addM('Fout: '+e.message,'bot');}
 }
-
-// ─── EXPORT / IMPORT ───────────────────────────────────────
-function exportJSON(){
-  const blob=new Blob([JSON.stringify({daily:S.daily,defs:S.defs},null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='nutrition_data_'+td()+'.json';a.click();
-  toast('JSON exported');}
-
-function importJSON(){
-  const inp=document.createElement('input');inp.type='file';inp.accept='.json';
-  inp.onchange=e=>{
-    const reader=new FileReader();
-    reader.onload=ev=>{
-      try{
-        const d=JSON.parse(ev.target.result);
-        if(d.daily)S.daily=d.daily;
-        if(d.defs)S.defs=d.defs;
-        sv();built={};
-        initToday();initLog();
-// Show data status
-(function(){
-  const el=document.getElementById('data-status');
-  if(el){
-    const src=localStorage.getItem('nt_d')?'localStorage':'seed data';
-    el.textContent=S.daily.length+' days · '+S.defs.length+' defaults · stored in '+src;
-  }
-})();
-        toast('Imported: '+S.daily.length+' days, '+S.defs.length+' defaults');
-      }catch(er){toast('Import failed: invalid JSON');}
-    };
-    reader.readAsText(e.target.files[0]);};inp.click();}
-
-function exportHTML(){
-  let out=document.documentElement.outerHTML;
-  const newDaily="const SD = "+JSON.stringify(S.daily)+";";
-  const newDefs="const SDEFS = "+JSON.stringify(S.defs)+";";
-  out=out.replace(/const SD = \[[\s\S]*?\];/,newDaily);
-  out=out.replace(/const SDEFS = \[[\s\S]*?\];/,newDefs);
-  const blob=new Blob(['<!DOCTYPE html>\n<html'+out.slice(out.indexOf('lang'))],{type:'text/html'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='nutrition_tracker_'+td()+'.html';a.click();
-  toast('HTML with your data baked in downloaded!');}
 
 // ─── IMAGE UPLOAD ──────────────────────────────────────────
 let pendingImageB64 = null;
